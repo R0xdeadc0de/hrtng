@@ -67,7 +67,6 @@ jobs:
         run: |
           git clone https://github.com/HexRaysSA/ida-sdk.git ida-sdk
           cd ida-sdk
-          git checkout v${{ matrix.ida.version }}
           cd ..
 
       - name: Setup CMake
