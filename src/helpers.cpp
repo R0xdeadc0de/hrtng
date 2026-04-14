@@ -24,6 +24,7 @@
 #include <hexrays.hpp>
 #include <bytes.hpp>
 #include <kernwin.hpp>
+#include <diskio.hpp>
 #include <pro.h>
 #include "warn_on.h"
 
@@ -250,8 +251,7 @@ qstring good_udm_name(const tinfo_t &struc, uint64 offInBits, const char *format
 		name.resize(MAX_NAME_LEN - 3);
 	validate_name(&name, VNT_UDTMEM);
 
-	return unique_nameD(name.c_str(), "_",
-										 [&struc, offInBits](const qstring &n)
+	return unique_nameD(name.c_str(), "_", [&struc, offInBits](const qstring &n)
 	{
 		udm_t m;
 		m.name = n;
@@ -272,8 +272,7 @@ qstring good_smember_name(const struc_t* sptr, ea_t offset, const char *format, 
 		name.resize(MAX_NAME_LEN);
 	//validate_name(&name, VNT_UDTMEM);
 
-	return unique_nameD(name.c_str(), "_",
-										 [&sptr, offset](const qstring &n)
+	return unique_nameD(name.c_str(), "_", [&sptr, offset](const qstring &n)
 	{
 
 		member_t *m = get_member_by_name(sptr, n.c_str());
@@ -791,4 +790,13 @@ int LogTail(LogLevel level, const char *fmt, ...)
 	int res = vmsg(fmt, va);
 	va_end(va);
   return res;
+}
+
+//------------------------------------------------
+char* getPluginsFile(char *buf, size_t bufsize, const char *filename)
+{
+	char *res = getsysfile(buf, bufsize, filename, PLG_SUBDIR "/hrtng");
+	if(res)
+		return res;
+	return getsysfile(buf, bufsize, filename, PLG_SUBDIR);
 }
