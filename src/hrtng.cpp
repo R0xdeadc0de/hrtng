@@ -1175,64 +1175,66 @@ ACT_DEF(var_reuse)
 	if(vi == -1)
 		return 0;
 
+	tinfo_t utype;
+	qstring utname;
+
 	types_locator_t tl(vu->cfunc, lvars, (int)vi);
 	tl.apply_to(&vu->cfunc->body, NULL);
 	if(tl.types.size() < 2) {
 		Log(llWarning, "There is no stack var reusing found (%s)\n", var->name.c_str());
-		return 0;
-	}
-
+		// do not exit to allow user manually add more types
+		//return 0;
+	} else {
 	// check if the same type already exists
-	tinfo_t utype;
-	qstring utname;
 #if IDA_SDK_VERSION < 850
-	for(uval_t idx = get_first_struc_idx(); idx != BADNODE; idx = get_next_struc_idx(idx)) {
-		tid_t id = get_struc_by_idx(idx);
-		struc_t *struc = get_struc(id);
-		if(!struc || !struc->is_union() || get_struc_size(struc) != tl.usize)
-			continue;
-		size_t j = 0;
-		for(; j < tl.types.size(); j++) {
-			uint32 i = 0;
-			for (; i < struc->memqty; i++) {
-				tinfo_t mt;
-				if(get_member_tinfo(&mt, &struc->members[i]) && tl.types[j].equals_to(mt))
-					break;
-			}
-			if(i == struc->memqty) //not found
-				break;
-		}
-		if(j == tl.types.size() && get_tid_name(&utname, id)) {
-			utype = create_typedef(utname.c_str());
-			break;
-		}
-	}
-#else //IDA_SDK_VERSION >= 850
-	uint32 limit = get_ordinal_limit();
-	if(limit != uint32(-1)) {
-		for(uint32 ord = 1; ord < limit; ++ord) {
-			tinfo_t t;
-			udt_type_data_t udt;
-			if(!t.get_numbered_type(ord, BTF_UNION, true) || !t.is_union() || t.get_size() != tl.usize || !t.get_udt_details(&udt))
+		for(uval_t idx = get_first_struc_idx(); idx != BADNODE; idx = get_next_struc_idx(idx)) {
+			tid_t id = get_struc_by_idx(idx);
+			struc_t *struc = get_struc(id);
+			if(!struc || !struc->is_union() || get_struc_size(struc) != tl.usize)
 				continue;
 			size_t j = 0;
 			for(; j < tl.types.size(); j++) {
-				size_t i = 0;
-				for(; i < udt.size(); ++i) {
-					if(tl.types[j].equals_to(udt.at(i).type))
+				uint32 i = 0;
+				for (; i < struc->memqty; i++) {
+					tinfo_t mt;
+					if(get_member_tinfo(&mt, &struc->members[i]) && tl.types[j].equals_to(mt))
 						break;
 				}
-				if(i == udt.size()) //not found
+				if(i == struc->memqty) //not found
 					break;
 			}
-			if(j == tl.types.size()) {
-				utype = t;
-				utype.get_type_name(&utname);
+			if(j == tl.types.size() && get_tid_name(&utname, id)) {
+				utype = create_typedef(utname.c_str());
 				break;
 			}
 		}
-	}
+#else //IDA_SDK_VERSION >= 850
+		uint32 limit = get_ordinal_limit();
+		if(limit != uint32(-1)) {
+			for(uint32 ord = 1; ord < limit; ++ord) {
+				tinfo_t t;
+				udt_type_data_t udt;
+				if(!t.get_numbered_type(ord, BTF_UNION, true) || !t.is_union() || t.get_size() != tl.usize || !t.get_udt_details(&udt))
+					continue;
+				size_t j = 0;
+				for(; j < tl.types.size(); j++) {
+					size_t i = 0;
+					for(; i < udt.size(); ++i) {
+						if(tl.types[j].equals_to(udt.at(i).type))
+							break;
+					}
+					if(i == udt.size()) //not found
+						break;
+				}
+				if(j == tl.types.size()) {
+					utype = t;
+					utype.get_type_name(&utname);
+					break;
+				}
+			}
+		}
 #endif //IDA_SDK_VERSION < 850
+	}
 
 	if(!utype.empty() && !utname.empty()) {
 		Log(llNotice, "Existing union has been found for Var reuse '%s'\n", utname.c_str());
@@ -3014,6 +3016,7 @@ ACT_DEF(uf_enable)
 {
 	vdui_t* vu = get_widget_vdui(ctx->widget);
 	ufDelGL(vu->cfunc->entry_ea);
+	ufDelFL(vu->cfunc->entry_ea);
 	vu->refresh_view(true);
 	return 0;
 }
@@ -4808,11 +4811,14 @@ void auto_comments(cfunc_t *cfunc)
 			pos++;
 		}
 	}
-
-	if (ufIsInGL(cfunc->entry_ea))
+	if (ufIsInFL(cfunc->entry_ea)) {
+		cfunc->sv.insert(cfunc->sv.begin(), simpleline_t(COLSTR("// Uflattening failed or incomplete, displayed pseudocode is incorrect. Press F5 to see the original code", SCOLOR_AUTOCMT)));
+		ufAddGL(cfunc->entry_ea); // disable unflattener to let user to do smth with it (remove MBA, opaque predicates, etc)
+		ufDelFL(cfunc->entry_ea); // clear fail status
+	} else if (ufIsInGL(cfunc->entry_ea))
 		cfunc->sv.insert(cfunc->sv.begin(), simpleline_t(COLSTR("// The function may be unflattened", SCOLOR_AUTOCMT)));
 	else if (ufIsInWL(cfunc->entry_ea))
-		cfunc->sv.insert(cfunc->sv.begin(), simpleline_t(COLSTR("// The function seems has been flattened", SCOLOR_AUTOCMT)));
+		cfunc->sv.insert(cfunc->sv.begin(), simpleline_t(COLSTR("// The function has been successfully unflattened", SCOLOR_AUTOCMT)));
 
 	if (has_varvals(cfunc->entry_ea))
 		cfunc->sv.insert(cfunc->sv.begin(), simpleline_t(COLSTR("// The function is modified by hidden variable assignment(s)", SCOLOR_AUTOCMT)));
@@ -5846,7 +5852,7 @@ plugmod_t*
 	addon.producer = "Sergey Belov and Hex-Rays SA, Milan Bohacek, J.C. Roberts, Alexander Pick, Rolf Rolles, Takahiro Haruyama," \
 									 " Karthik Selvaraj, Ali Rahbar, Ali Pezeshk, Elias Bachaalany, Markus Gaasedelen";
 	addon.url = "https://github.com/KasperskyLab/hrtng";
-	addon.version = "3.8.94";
+	addon.version = "3.8.95";
 	msg("[hrt] %s (%s) v%s for IDA%d\n", addon.id, addon.name, addon.version, IDA_SDK_VERSION);
 
 	if(inited) {
