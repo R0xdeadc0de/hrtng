@@ -67,6 +67,7 @@ or one more project:
 std::set<ea_t> g_BlackList; // not obfuscated
 std::set<ea_t> g_WhiteList; // obfuscated and finally unflattened and printed
 std::set<ea_t> g_GrayList;  // obfuscated, but user ask to see original code or unflattening fail
+std::set<ea_t> g_FailList;  // deobfuscation is failed
 ea_t ufCurr = BADADDR;
 
 bool ufIsInWL(ea_t ea) {
@@ -90,6 +91,20 @@ void ufAddGL(ea_t ea) {
 void ufDelGL(ea_t ea) {
 	g_GrayList.erase(ea);
 }
+
+bool ufIsInFL(ea_t ea) {
+	return g_FailList.find(ea) != g_FailList.end();
+}
+
+void ufAddFL(ea_t ea) {
+	if (ea != BADADDR)
+		g_FailList.insert(ea);
+}
+
+void ufDelFL(ea_t ea) {
+	g_FailList.erase(ea);
+}
+
 
 inline THREAD_SAFE bool isUfJc(mcode_t opcode)
 {
@@ -238,8 +253,9 @@ struct ida_local SingleAssingFinder : public minsn_visitor_t
 	minsn_t* lastSeenAssign;
 	int lastSeenBlk;
 	size_t seenCnt;
+	mop_t *ptrAsgn;
 
-	SingleAssingFinder(mop_t *dest) : dst(dest), lastSeenAssign(NULL), lastSeenBlk(-1), seenCnt(0) {};
+	SingleAssingFinder(mop_t *dest) : dst(dest), lastSeenAssign(NULL), lastSeenBlk(-1), seenCnt(0), ptrAsgn(nullptr) {};
 
 	int visit_minsn(void)
 	{
@@ -250,6 +266,12 @@ struct ida_local SingleAssingFinder : public minsn_visitor_t
 			lastSeenBlk = blk->serial;
 			seenCnt++;
 			MSG_UF3(("[I] %a: SingleAssingFinder: blk %d '%s'\n", curins->ea, lastSeenBlk, curins->dstr()));
+		} else if(curins->opcode == m_mov && curins->l.is_stkaddr() && curins->l.a->equal_mops(*dst, EQ_IGNSIZE)) {
+			ptrAsgn = &curins->d;
+			lastSeenAssign = curins;
+			lastSeenBlk = blk->serial;
+			seenCnt++;
+			MSG_UF3(("[I] %a: SingleAssingFinder ptrAsgn: blk %d '%s'\n", curins->ea, blk->serial, curins->dstr()));
 		}
 		return 0;
 	}
@@ -735,17 +757,22 @@ struct ida_local CFFlattenInfo
 			if (bFound)
 				break;
 		}
+		SingleAssingFinder saf(opMax);
+		mba->for_all_topinsns(saf);
 
 		mop_t *localOpAssigned = NULL; // This is the "assignment" variable, whose value is updated by the switch case code
 
 		if (bFound && mb_dispatch->head != NULL && mb_dispatch->head->opcode != m_and) {
 			// If the "comparison" variable was assigned a number in the first block, then the function is only using one variable, not two, for dispatch.
 			localOpAssigned = opMax;
+			// there may be pointer variable assignmen too
+			if (saf.ptrAsgn) {
+				localOpAssigned = saf.ptrAsgn;
+				this->bPtrAssign = true;
+			}
 		}  else {
 			// Otherwise, look for assignments of one of the variables assigned a number in the first block to the comparison variable
 			// For all variables assigned a number in the first block, find all assignments throughout the function to the comparison variable
-			SingleAssingFinder saf(opMax);
-			mba->for_all_topinsns(saf);
 			if (saf.seenCnt != 1 || saf.lastSeenBlk == -1) {// There should have only been one of them; is that true?
 				MSG_UF1(("[E] Comparison var %s was assigned %d times, not 1 as expected\n", opMax->dstr(), saf.seenCnt));
 				return false;
@@ -755,6 +782,9 @@ struct ida_local CFFlattenInfo
 			localOpAssigned = &saf.lastSeenAssign->l;
 			if (saf.lastSeenAssign->opcode == m_ldx) {
 				localOpAssigned = &saf.lastSeenAssign->r; //off is in 'r' part of m_ldx
+				this->bPtrAssign = true;
+			} else if(saf.ptrAsgn) {
+				localOpAssigned = saf.ptrAsgn;
 				this->bPtrAssign = true;
 			}
 			assingBlk = saf.lastSeenBlk;
@@ -1234,7 +1264,7 @@ static bool mop2list(mop_t* mop, mlist_t* ml, mbl_array_t* mba)
 	if (!isRegOvar(mop->t))
 		return false;
 	gco_info_t gko;
-	gko.size = ea_size;
+	gko.size = mop->size;//ea_size;
 	if (mop->t == mop_r) {
 		gko.flags = GCO_REG | GCO_USE;
 		gko.regnum = mop->r;
@@ -1279,8 +1309,17 @@ struct ida_local CFUnflattener
 			if (p->opcode == m_stx) {
 				// special case for "*var = smth" assingnment, consider as definition of var when bPtrAssign
 				// build_def_list returns in that case nothing for MUST_ACCESS and everything for MAY_ACCESS
+#if 0
 				mlist_t def;
+				// something wrong here when adding stackvar, it added with wrong stkoff
 				if (mop2list(&p->d, &def, mb->mba)) {
+#elif 0
+				if (isRegOvar(p->d.t)) {
+					mlist_t def = mb->build_use_list(*p, MUST_ACCESS);
+#else
+				mlist_t def;
+				if (InsertOp(mb, def, &p->d)) {
+#endif
 					if (def.includes(ml))
 						return p;
 				}
@@ -1723,6 +1762,8 @@ struct ida_local CFUnflattener
 			// rather than two destinations for flattening of if-statements.
 			m_DeferredErasuresLocal.clear();
 			int iDestNo = FindBlockTargetOrLastCopy(mb, mbClusterHead, &cfi.opAssigned, true, true);
+			if(iDestNo < 0 && cfi.bPtrAssign) // there are seen direct assignment to opCompared in bPtrAssign mode
+				iDestNo = FindBlockTargetOrLastCopy(mb, mbClusterHead, &cfi.opCompared, true, true);
 			// Stash off a copy of the last variable in the chain of assignments to the assignment variable, as well as the assignment instruction
 			// (the latter only for debug-printing purposes).
 			mop_t* opCopy;
@@ -1954,6 +1995,7 @@ struct ida_local CFUnflattener
 			    (int)dispBlk->predset.size(), iFixed, skippedPreds, iFail);
 			if (iFail) {
 				Log(llWarning, "%a unflat: not all predecessors were resolved, pseudocode may be incorrect\n", mba->entry_ea);
+				ufAddFL(mba->entry_ea);
 			}
 		}
 

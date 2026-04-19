@@ -97,7 +97,7 @@ tinfo_t getType4Name(const char *name, bool funcType /*= false*/)
 	const p_list *fields;
 	tinfo_t       t;
 	if(get_named_type(NULL, newName.c_str(), NTF_TYPE, &type, &fields)) {
-		if(is_type_struct(*type))
+		if(is_type_struni(*type))
 			t = create_typedef(newName.c_str());
 		else
 			t.deserialize(NULL, &type, &fields);
