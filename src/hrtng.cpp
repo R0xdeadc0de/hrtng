@@ -81,7 +81,6 @@ hexdsp_t *hexdsp = NULL;
 bool set_var_type(vdui_t *vu, lvar_t *lv, tinfo_t *ts);
 bool is_arg_var(vdui_t *vu, lvar_t **var = nullptr);
 bool is_call(vdui_t *vu, cexpr_t **call = nullptr, bool argsDeep = false);
-bool isMultiTargetCall(vdui_t *vu);
 bool is_recastable(vdui_t *vu, tinfo_t *ts = nullptr, cexpr_t **call = nullptr);
 bool is_stack_var_assign(vdui_t *vu, int* varIdx, ea_t *ea, sval_t* size);
 bool is_array_char_assign(vdui_t *vu, int* varIdx, ea_t *ea);
@@ -125,7 +124,6 @@ ACT_DECL(convert_to_golang_call, AST_ENABLE_FOR(vu->item.citype == VDI_FUNC))
 #endif // IDA_SDK_VERSION < 850
 ACT_DECL(convert_to_usercall , AST_ENABLE_FOR(vu->item.citype == VDI_FUNC))
 ACT_DECL(jump_to_indirect_call  , AST_ENABLE_FOR(is_call(vu)))
-ACT_DECL(jump_to_cxrefs      , AST_ENABLE_FOR(isMultiTargetCall(vu)))
 ACT_DECL(zeal_doc_help       , AST_ENABLE_FOR(is_call(vu)))
 ACT_DECL(add_VT              , AST_ENABLE_FOR(is_VT_assign(vu, NULL, NULL)));
 ACT_DECL(add_VT_struct       , return ((ctx->widget_type != BWN_DISASM) ? AST_DISABLE_FOR_WIDGET : (((is_data(get_flags(ctx->cur_ea)) && is_func(get_flags(get_ea(ctx->cur_ea))))) ? AST_ENABLE : AST_DISABLE)))
@@ -138,16 +136,13 @@ ACT_DECL(decrypt_const           , AST_ENABLE_FOR(is_number(vu)))
 ACT_DECL(decrypt_data, flags64_t flg; return ((ctx->widget_type != BWN_DISASM) ? AST_DISABLE_FOR_WIDGET : ((flg = get_flags(ctx->cur_ea), /*has_value(flg) &&*/ (is_data(flg) || is_unknown(flg))) ? AST_ENABLE : AST_DISABLE)))
 ACT_DECL(do_appcall              , AST_ENABLE_FOR(is_appcallable(vu, NULL, NULL)))
 ACT_DECL(convert_gap             , AST_ENABLE_FOR(is_gap_field(vu)))
-ACT_DECL(disable_inlines         , AST_ENABLE_FOR(hasInlines(vu, NULL)))
-ACT_DECL(enable_inlines          , AST_ENABLE_FOR(hasInlines(vu, NULL)))
+ACT_DECL(inlines                 , AST_ENABLE_FOR(hasInlines(vu, NULL)))
 ACT_DECL(rename_inline           , AST_ENABLE_FOR(is_nlib_inline(vu)))
 ACT_DECL(create_inline_gr        , return ((ctx->widget_type != BWN_DISASM) ? AST_DISABLE_FOR_WIDGET : ((get_view_renderer_type(ctx->widget) == TCCRT_GRAPH) ? AST_ENABLE : AST_DISABLE)))
 ACT_DECL(create_inline_sel       , return ((ctx->widget_type != BWN_PSEUDOCODE && ctx->widget_type != BWN_DISASM) ?  AST_DISABLE_FOR_WIDGET : (ctx->has_flag(ACF_HAS_SELECTION) ?  AST_ENABLE : AST_DISABLE)))
-ACT_DECL(uf_enable               , AST_ENABLE_FOR(ufIsInGL(vu->cfunc->entry_ea)))
-ACT_DECL(uf_disable              , AST_ENABLE_FOR(ufIsInWL(vu->cfunc->entry_ea)))
+ACT_DECL(unflat                  , AST_ENABLE_FOR(ufIsInGL(vu->cfunc->entry_ea) || ufIsInWL(vu->cfunc->entry_ea)))
 #if IDA_SDK_VERSION >= 750
-ACT_DECL(mavx_enable             , AST_ENABLE_FOR(isMicroAvx_avail() && !isMicroAvx_active()))
-ACT_DECL(mavx_disable            , AST_ENABLE_FOR(isMicroAvx_avail() &&  isMicroAvx_active()))
+ACT_DECL(mavx                    , AST_ENABLE_FOR(isMicroAvx_avail()))
 #endif //IDA_SDK_VERSION >= 750
 ACT_DECL(selection2block         , return (ctx->widget_type != BWN_PSEUDOCODE ? AST_DISABLE_FOR_WIDGET : (ctx->has_flag(ACF_HAS_SELECTION) ? AST_ENABLE : AST_DISABLE)))
 ACT_DECL(clear_if42blocks        , AST_ENABLE_FOR(has_if42blocks(vu->cfunc->entry_ea)))
@@ -172,7 +167,6 @@ static const action_desc_t actions[] =
 	ACT_DESC("[hrt] Unite var reuse",                NULL, var_reuse),
 	ACT_DESC("[hrt] Convert to __usercall",          "U", convert_to_usercall),
 	ACT_DESC("[hrt] Jump to indirect call",          "J", jump_to_indirect_call),
-	ACT_DESC("[hrt] Jump to visited indirect call...", "Shift-J", jump_to_cxrefs),
 	ACT_DESC("[hrt] Zeal offline API help (zealdocs.org)",  "Alt-F1", zeal_doc_help),
 	ACT_DESC("[hrt] Add VT",                         NULL, add_VT),
 	ACT_DESC("[hrt] Add VT struct",                  NULL, add_VT_struct),
@@ -185,17 +179,14 @@ static const action_desc_t actions[] =
   ACT_DESC("[hrt] Decrypt data",                   "Shift-D", decrypt_data),
 	ACT_DESC("[hrt] Mass strings decryption",        "A", do_appcall),
 	ACT_DESC("[hrt] Fix field at struct gap",         "F", convert_gap),
-	ACT_DESC("[hrt] Disable inlines",                NULL, disable_inlines),
-	ACT_DESC("[hrt] Enable inlines",                 NULL, enable_inlines),
-	ACT_DESC("[hrt] Rename inline...",                "N", rename_inline),
 	ACT_DESC("[hrt] Rename func...",             "Ctrl-N", rename_func),
 	ACT_DESC("[hrt] Create 'inline' from grouped nodes",  NULL, create_inline_gr),
 	ACT_DESC("[hrt] Create 'inline' from selection",  NULL, create_inline_sel),
-	ACT_DESC("[hrt] Enable Unflattener",              NULL, uf_enable),
-	ACT_DESC("[hrt] Disable Unflattener",             NULL, uf_disable),
+	ACT_DESC("[hrt] Rename inline...",                "N", rename_inline),
+	ACT_DESC_CHECK("[hrt] Inlines",                   NULL, inlines),
+	ACT_DESC_CHECK("[hrt] Unflattener",          "Shift-U", unflat),
 #if IDA_SDK_VERSION >= 750
-  ACT_DESC("[hrt] Enable AVX lifter",              NULL, mavx_enable),
-	ACT_DESC("[hrt] Disable AVX lifter",             NULL, mavx_disable),
+  ACT_DESC_CHECK("[hrt] AVX lifter",              NULL, mavx),
 #else // IDA_SDK_VERSION < 750
 	ACT_DESC("[hrt] Remove return type",             NULL, remove_rettype),
 	ACT_DESC("[hrt] Remove this argument",           "A", remove_argument),
@@ -240,8 +231,6 @@ void add_hrt_popup_items(TWidget *view, TPopupMenu *p, vdui_t* vu)
 	if(is_call(vu)) {
 		attach_action_to_popup(view, p, ACT_NAME(zeal_doc_help));
 		attach_action_to_popup(view, p, ACT_NAME(jump_to_indirect_call));
-		if(isMultiTargetCall(vu))
-			attach_action_to_popup(view, p, ACT_NAME(jump_to_cxrefs));
 	}
 	if(is_VT_assign(vu, NULL, NULL))
 		attach_action_to_popup(view, p, ACT_NAME(add_VT));
@@ -279,40 +268,49 @@ void add_hrt_popup_items(TWidget *view, TPopupMenu *p, vdui_t* vu)
 	}
 	else if (is_gap_field(vu))
 		attach_action_to_popup(view, p, ACT_NAME(convert_gap));
-	bool bEnabled;
-	if (hasInlines(vu, &bEnabled)) {
-		if (bEnabled) {
-			if(is_nlib_inline(vu))
-				attach_action_to_popup(view, p, ACT_NAME(rename_inline));
-			attach_action_to_popup(view, p, ACT_NAME(disable_inlines));
-		} else {
-			attach_action_to_popup(view, p, ACT_NAME(enable_inlines));
-		}
-	}
-	attach_action_to_popup(view, p, ACT_NAME(create_inline_sel));
-	if(ufIsInGL(vu->cfunc->entry_ea))
-		attach_action_to_popup(view, p, ACT_NAME(uf_enable));
-	else if (ufIsInWL(vu->cfunc->entry_ea))
-		attach_action_to_popup(view, p, ACT_NAME(uf_disable));
 
 	attach_action_to_popup(view, p, ACT_NAME(msigAdd));
 	if(isMsig(vu, nullptr)) {
 		attach_action_to_popup(view, p, ACT_NAME(msigEdit));
 		attach_action_to_popup(view, p, ACT_NAME(msigAccept));
 	}
+
+	attach_action_to_popup(view, p, ACT_NAME(rename_func));
+	attach_action_to_popup(view, p, ACT_NAME(refactoring));
+
+	bool bEnabled;
+	if (hasInlines(vu, &bEnabled)) {
+		if (bEnabled) {
+			if(is_nlib_inline(vu))
+				attach_action_to_popup(view, p, ACT_NAME(rename_inline));
+			update_action_checked(ACT_NAME(inlines), true);
+		} else {
+			update_action_checked(ACT_NAME(inlines), false);
+		}
+		attach_action_to_popup(view, p, ACT_NAME(inlines));
+	}
+	attach_action_to_popup(view, p, ACT_NAME(create_inline_sel));
+
+	if(ufIsInGL(vu->cfunc->entry_ea)) {
+		update_action_checked(ACT_NAME(unflat), false);
+		attach_action_to_popup(view, p, ACT_NAME(unflat));
+	} else if (ufIsInWL(vu->cfunc->entry_ea)) {
+		update_action_checked(ACT_NAME(unflat), true);
+		attach_action_to_popup(view, p, ACT_NAME(unflat));
+	}
 #if IDA_SDK_VERSION >= 750
 	if(isMicroAvx_avail()) {
 		if(isMicroAvx_active())
-			attach_action_to_popup(view, p, ACT_NAME(mavx_disable));
+			update_action_checked(ACT_NAME(mavx), true);
 		else
-			attach_action_to_popup(view, p, ACT_NAME(mavx_enable));
+			update_action_checked(ACT_NAME(mavx), false);
+		attach_action_to_popup(view, p, ACT_NAME(mavx));
 	}
 #endif //IDA_SDK_VERSION >= 750
+
 	attach_action_to_popup(view, p, ACT_NAME(selection2block));
 	if (has_if42blocks(vu->cfunc->entry_ea))
 		attach_action_to_popup(view, p, ACT_NAME(clear_if42blocks));
-	attach_action_to_popup(view, p, ACT_NAME(rename_func));
-	attach_action_to_popup(view, p, ACT_NAME(refactoring));
 }
 
 void hrt_reg_act()
@@ -334,6 +332,12 @@ void hrt_reg_act()
 
 	for (size_t i = 0, n = qnumber(actions); i < n; ++i)
 		register_action(actions[i]);
+
+#if IDA_SDK_VERSION < 800
+	update_action_checkable(ACT_NAME(unflat), true);
+	update_action_checkable(ACT_NAME(mavx), true);
+	update_action_checkable(ACT_NAME(inlines), true);
+#endif //IDA_SDK_VERSION < 800
 
 	//kill duplicating shortcut
 	qstring shortcut;
@@ -416,33 +420,6 @@ size_t cxrefs_from(ea_t from, eavec_t* to)
 		}
 	} while (x.next_from());
 	return cnt;
-}
-
-bool isMultiTargetCall(vdui_t *vu)
-{
-	cexpr_t *call;
-	if(!is_call(vu, &call) || call->ea == BADADDR)
-		return false;
-
-	function_list_t fl("[hrt] Called functions");
-	return cxrefs_from(call->ea, nullptr) > 1;
-}
-
-ACT_DEF(jump_to_cxrefs)
-{
-	vdui_t *vu = get_widget_vdui(ctx->widget);
-	cexpr_t *call;
-	if(!is_call(vu, &call) || call->ea == BADADDR)
-		return 0;
-
-	function_list_t fl("[hrt] Called functions");
-	if(!cxrefs_from(call->ea, &fl.functions))
-		return 0;
-
-	ssize_t choosed = fl.choose();
-	if (choosed >= 0 && jumpto(fl.functions[choosed]))
-		return 1;
-	return 0;
 }
 
 //-------------------------------------------------------------------------
@@ -961,7 +938,7 @@ ACT_DEF(rename_func)
 	qstring highlight;
 	uint32 hlflg;
 	if(!var && get_highlight(&highlight, ctx->widget, &hlflg)) {
-		if(newName.empty() && get_name_ea(BADADDR, highlight.c_str()) != BADADDR)
+		if(newName.empty() && get_name_ea_ex(highlight) != BADADDR)
 			mk_name_w(highlight);
 		newName.append(highlight);
 	} else if(has_user_name(get_flags(vu->cfunc->entry_ea)))
@@ -1227,8 +1204,10 @@ ACT_DEF(var_reuse)
 						break;
 				}
 				if(j == tl.types.size()) {
-					utype = t;
-					utype.get_type_name(&utname);
+					if(t.get_type_name(&utname))
+						utype = create_typedef(utname.c_str());
+					else
+						utype = t;
 					break;
 				}
 			}
@@ -1236,8 +1215,8 @@ ACT_DEF(var_reuse)
 #endif //IDA_SDK_VERSION < 850
 	}
 
-	if(!utype.empty() && !utname.empty()) {
-		Log(llNotice, "Existing union has been found for Var reuse '%s'\n", utname.c_str());
+	if(!utype.empty()) {
+		Log(llNotice, "Existing union has been found for Var reuse '%s'\n", utype.dstr());
 	} else {
 		udt_type_data_t utd;
 		utd.is_union = true;
@@ -2668,19 +2647,14 @@ ACT_DEF(convert_gap)
 }
 
 //-----------------------------------------------------
-ACT_DEF(disable_inlines)
+ACT_DEF(inlines)
 {
 	vdui_t *vu = get_widget_vdui(ctx->widget);
-	XXable_inlines(vu->cfunc->entry_ea, true);
-	vu->refresh_view(true);
-	return 0;
-}
-
-ACT_DEF(enable_inlines)
-{
-	vdui_t *vu = get_widget_vdui(ctx->widget);
-	XXable_inlines(vu->cfunc->entry_ea, false);
-	vu->refresh_view(true);
+	bool bEnabled;
+	if(hasInlines(vu, &bEnabled)) {
+		XXable_inlines(vu->cfunc->entry_ea, bEnabled);
+		vu->refresh_view(true);
+	}
 	return 0;
 }
 
@@ -3012,37 +2986,28 @@ ACT_DEF(clear_if42blocks)
 }
 
 //-----------------------------------------------------
-ACT_DEF(uf_enable)
+ACT_DEF(unflat)
 {
 	vdui_t* vu = get_widget_vdui(ctx->widget);
-	ufDelGL(vu->cfunc->entry_ea);
-	ufDelFL(vu->cfunc->entry_ea);
-	vu->refresh_view(true);
-	return 0;
-}
-
-ACT_DEF(uf_disable)
-{
-	vdui_t* vu = get_widget_vdui(ctx->widget);
-	ufAddGL(vu->cfunc->entry_ea);
+	if(ufIsInGL(vu->cfunc->entry_ea)) {
+		ufDelGL(vu->cfunc->entry_ea);
+		ufDelFL(vu->cfunc->entry_ea);
+	} else {
+		ufAddGL(vu->cfunc->entry_ea);
+	}
 	vu->refresh_view(true);
 	return 0;
 }
 
 //-----------------------------------------------------
 #if IDA_SDK_VERSION >= 750
-ACT_DEF(mavx_enable)
+ACT_DEF(mavx)
 {
 	vdui_t* vu = get_widget_vdui(ctx->widget);
-	MicroAvx_init();
-	vu->refresh_view(true);
-	return 0;
-}
-
-ACT_DEF(mavx_disable)
-{
-	vdui_t* vu = get_widget_vdui(ctx->widget);
-	MicroAvx_done();
+	if(isMicroAvx_active())
+		MicroAvx_done();
+	else
+		MicroAvx_init();
 	vu->refresh_view(true);
 	return 0;
 }
@@ -4783,7 +4748,7 @@ void auto_comments(cfunc_t *cfunc)
 					for(auto callee : callees) {
 						simpleline_t sl;
 						sl.line.fill(' ', indent);
-						sl.line.cat_sprnt(COLSTR("// %s", SCOLOR_AUTOCMT), get_short_name(callee).c_str());
+						sl.line.cat_sprnt(COLSTR("// %a %s", SCOLOR_AUTOCMT), callee, get_short_name(callee).c_str());
 						cfunc->sv.insert(cfunc->sv.begin() + y, sl);
 					}
 				}
@@ -4791,18 +4756,18 @@ void auto_comments(cfunc_t *cfunc)
 		}
 	}
 
-	// insert 'addr-name' before any "@0xaddr" in pseudocode text
+	// insert 'addr-name' before any `@ 0xAddress` in pseudocode text
 	for(size_t i = 0; i < cfunc->sv.size(); i++) {
 		qstring &l = cfunc->sv[i].line;
 		size_t pos = 0;
-		while(qstring::npos != (pos = l.find("@0x", pos))) {
+		while(qstring::npos != (pos = l.find("@ 0x", pos))) {
 			ea_t ea = BADADDR;
-			atoea(&ea, (const char*)(l.begin() + pos + 1)); //it seems atoea always returns false if string has extra characters after the address
+			atoea(&ea, (const char*)(l.begin() + pos + 2)); //it seems atoea always returns false if string has extra characters after the address
 			if(ea != BADADDR && is_mapped(ea)) {
 				qstring eaname = get_short_name(ea);
 				if(!eaname.empty()) {
 					qstring s;
-					s.sprnt(COLSTR("%s", SCOLOR_AUTOCMT), eaname.c_str());
+					s.sprnt(COLSTR("%s ", SCOLOR_AUTOCMT), eaname.c_str());
 					l.insert(pos, s);
 					pos += s.size();
 					continue;
@@ -4937,7 +4902,7 @@ static ssize_t idaapi callback(void *, hexrays_event_t event, va_list va)
 	case hxe_func_printed:
 		{
 			cfunc_t* cfunc = va_arg(va, cfunc_t*);
-			if(ufCurr == cfunc->entry_ea) {
+			if(ufCurr == cfunc->entry_ea && !ufIsInFL(ufCurr)) {
 				//has been sucessfuly unflattened first time
 				ufDelGL(ufCurr);
 				ufAddWL(ufCurr);
@@ -5852,7 +5817,7 @@ plugmod_t*
 	addon.producer = "Sergey Belov and Hex-Rays SA, Milan Bohacek, J.C. Roberts, Alexander Pick, Rolf Rolles, Takahiro Haruyama," \
 									 " Karthik Selvaraj, Ali Rahbar, Ali Pezeshk, Elias Bachaalany, Markus Gaasedelen";
 	addon.url = "https://github.com/KasperskyLab/hrtng";
-	addon.version = "3.8.95";
+	addon.version = "3.8.97";
 	msg("[hrt] %s (%s) v%s for IDA%d\n", addon.id, addon.name, addon.version, IDA_SDK_VERSION);
 
 	if(inited) {

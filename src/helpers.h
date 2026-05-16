@@ -34,6 +34,11 @@
 #define ACT_NAME(name) "hrt:" # name
 #define ACT_DESC(label, shortcut, name) ACTION_DESC_LITERAL(ACT_NAME(name), label, &name, shortcut, NULL, -1)
 #define ACT_DESC1(label, shortcut, name) static const action_desc_t action_ ## name = ACT_DESC(label, shortcut, name);
+#if IDA_SDK_VERSION < 800
+#define ACT_DESC_CHECK(label, shortcut, name) ACT_DESC(label, shortcut, name)
+#else //  IDA_SDK_VERSION >= 800
+#define ACT_DESC_CHECK(label, shortcut, name) ACTION_DESC_LITERAL_OWNER(ACT_NAME(name), label, &name, &PLUGIN, shortcut, NULL, -1, ADF_OT_PLUGIN | ADF_CHECKABLE | ADF_CHECKED)
+#endif // IDA_SDK_VERSION < 800
 #define ACT_DEF(name) int idaapi name ## _t::activate(action_activation_ctx_t *ctx)
 #define ACT_REG(name) register_action(action_ ## name)
 #define ACT_UNREG(name) unregister_action(ACT_NAME(name))
@@ -193,6 +198,7 @@ bool jump_custom_viewer(TWidget *custom_viewer, int line, int x, int y);
 bool isWnd();
 bool appendComment(qstring &comments, qstring &newCmt, bool bDuplicable = false);
 bool setComment4Exp(cfunc_t* func, user_cmts_t *cmts, citem_t *expr, const char* comment, bool bDisasmOnly = false, bool bSemicolonCmt = false, bool bOverride = false);
+ea_t get_name_ea_ex(qstring &name);
 ea_t get_call_dst(cfunc_t* cfunc, cexpr_t *call);
 tinfo_t getCallInfo(cfunc_t* cfunc, cexpr_t *call, ea_t* dstea);
 void replace_colortag_inplace(char *line, int pos, char prefix, char find, char replace);
